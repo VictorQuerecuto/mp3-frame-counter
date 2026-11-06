@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, test, build (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    name: Docker image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t mp3-frame-counter .
+      - name: Start the container
+        run: docker run -d --name app -p 3000:3000 mp3-frame-counter
+      - name: Upload the sample and expect mediainfo's frame count
+        run: |
+          curl -s -o /dev/null --retry 30 --retry-all-errors --retry-delay 1 http://localhost:3000/
+          result=$(curl -s -F "file=@test/fixtures/sample.mp3" http://localhost:3000/file-upload)
+          echo "Response: $result"
+          test "$result" = '{"frameCount":6089}'
+      - name: Container logs
+        if: always()
+        run: docker logs app

@@ -17,6 +17,7 @@ import {
   buildHeader,
   buildId3v1Tag,
   buildId3v2Tag,
+  buildMetadataFrame,
   buildUnsupportedFrame,
   concatBytes,
   repeat,
@@ -45,7 +46,11 @@ describe('FrameCounter', () => {
     });
 
     it('returns 0 for empty input', () => {
-      expect(countWhole(new Uint8Array(0))).toEqual({ frameCount: 0, unsupportedFormat: null });
+      expect(countWhole(new Uint8Array(0))).toEqual({
+        frameCount: 0,
+        metadataFrame: null,
+        unsupportedFormat: null,
+      });
     });
   });
 
@@ -139,7 +144,11 @@ describe('FrameCounter', () => {
         Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a),
         new Uint8Array(1000),
       );
-      expect(countWhole(png)).toEqual({ frameCount: 0, unsupportedFormat: null });
+      expect(countWhole(png)).toEqual({
+        frameCount: 0,
+        metadataFrame: null,
+        unsupportedFormat: null,
+      });
     });
   });
 
@@ -152,17 +161,49 @@ describe('FrameCounter', () => {
       const file = repeat(buildUnsupportedFrame(format), 20);
       expect(countWhole(file)).toEqual({
         frameCount: 0,
+        metadataFrame: null,
         unsupportedFormat: { version: format.version, layer: format.layer },
       });
     });
   });
 
+  describe('metadata (Xing/Info/VBRI) frame', () => {
+    it.each(['Xing', 'Info', 'VBRI'] as const)(
+      'does not count a leading %s frame by default, and reports it',
+      (kind) => {
+        const file = concatBytes(buildMetadataFrame(kind), repeat(frame, 3));
+        expect(countWhole(file)).toMatchObject({ frameCount: 3, metadataFrame: kind });
+      },
+    );
+
+    it('counts it when countMetadataFrame is true', () => {
+      const file = concatBytes(buildMetadataFrame('Xing'), repeat(frame, 3));
+      expect(countWhole(file, { countMetadataFrame: true }).frameCount).toBe(4);
+    });
+
+    it('detects it after a leading ID3v2 tag', () => {
+      const file = concatBytes(
+        buildId3v2Tag({ bodySize: 300 }),
+        buildMetadataFrame('Info'),
+        repeat(frame, 3),
+      );
+      expect(countWhole(file)).toMatchObject({ frameCount: 3, metadataFrame: 'Info' });
+    });
+
+    it('only checks the first frame: later frames are audio, whatever their bytes say', () => {
+      const file = concatBytes(repeat(frame, 2), buildMetadataFrame('Xing'), frame);
+      expect(countWhole(file)).toMatchObject({ frameCount: 4, metadataFrame: null });
+    });
+  });
+
   describe('chunk boundaries', () => {
-    // Tags, padding, VBR frames, a false sync in junk, a mid-stream tag, and trailing tags.
+    // Tags, a Xing frame, padding, VBR frames, a false sync in junk, a mid-stream tag, and
+    // trailing tags.
     const mixedFile = concatBytes(
       buildId3v2Tag({ bodySize: 2000 }),
       buildId3v2Tag({ bodySize: 50, hasFooter: true }),
       new Uint8Array(13),
+      buildMetadataFrame('Xing'),
       ...[9, 14, 1, 5, 9, 12, 9, 9, 3, 14].map((bitrateIndex, i) =>
         buildFrame({ bitrateIndex, padding: i % 3 === 0 }),
       ),
@@ -173,7 +214,7 @@ describe('FrameCounter', () => {
       buildApeTag(),
       buildId3v1Tag(),
     );
-    const expected = 19;
+    const expected = 19; // the Xing frame isn't counted
 
     it('counts the mixed file correctly in one piece', () => {
       expect(countWhole(mixedFile).frameCount).toBe(expected);
@@ -200,11 +241,19 @@ describe('FrameCounter', () => {
 
 describe('sample.mp3 fixture', () => {
   const sample = new Uint8Array(readFileSync(new URL('../fixtures/sample.mp3', import.meta.url)));
-  // 6,089 audio frames + 1 Xing/Info frame. mediainfo reports 6,089: see the Xing handling.
-  const physicalFrames = 6090;
+  // From `mediainfo --Inform="Audio;%FrameCount%" sample.mp3`.
+  const mediainfoFrameCount = 6089;
 
-  it('counts every frame in the file', () => {
-    expect(countWhole(sample).frameCount).toBe(physicalFrames);
+  it('matches mediainfo, skipping the leading Xing frame', () => {
+    expect(countWhole(sample)).toEqual({
+      frameCount: mediainfoFrameCount,
+      metadataFrame: 'Xing',
+      unsupportedFormat: null,
+    });
+  });
+
+  it('counts the Xing frame too when asked (6,090 frames physically in the file)', () => {
+    expect(countWhole(sample, { countMetadataFrame: true }).frameCount).toBe(6090);
   });
 
   it.each([
@@ -213,6 +262,6 @@ describe('sample.mp3 fixture', () => {
     { name: 'random chunks up to 100 bytes', nextSize: randomSize(1, 100) },
     { name: 'random chunks up to 100 KB', nextSize: randomSize(2, 100_000) },
   ])('gives the same count in $name', ({ nextSize }) => {
-    expect(countInChunks(sample, nextSize).frameCount).toBe(physicalFrames);
+    expect(countInChunks(sample, nextSize).frameCount).toBe(mediainfoFrameCount);
   });
 });

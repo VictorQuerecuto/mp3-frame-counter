@@ -2,6 +2,16 @@ import type { ChannelMode, MpegLayer, MpegVersion } from './types.js';
 
 export const FRAME_HEADER_SIZE = 4;
 
+/**
+ * Whether a Xing/Info/VBRI metadata frame at the start of the stream counts as a frame.
+ * It is a valid MPEG frame, but it holds encoder metadata, not audio.
+ *
+ * false matches mediainfo: for test/fixtures/sample.mp3 it reports 6089 frames, while the file
+ * physically holds 6090 (the extra one is the Xing frame). 6089 is also the frame count LAME
+ * itself stored inside that Xing frame. Override per counter with { countMetadataFrame }.
+ */
+export const COUNT_METADATA_FRAME = false;
+
 /** Every MPEG-1 Layer III frame carries 1152 samples per channel. */
 export const SAMPLES_PER_FRAME = 1152;
 

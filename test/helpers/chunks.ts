@@ -1,6 +1,10 @@
 // Helpers for feeding bytes to the counter in chunks, the way a network upload arrives.
 
-import { FrameCounter, type FrameCountResult } from '../../src/mp3/frameCounter.js';
+import {
+  FrameCounter,
+  type FrameCounterOptions,
+  type FrameCountResult,
+} from '../../src/mp3/frameCounter.js';
 
 /** Splits `bytes` into views (no copying) whose sizes come from `nextSize`. */
 export function* chunksOf(bytes: Uint8Array, nextSize: () => number): Generator<Uint8Array> {
@@ -20,14 +24,18 @@ export function randomSize(seed: number, max: number): () => number {
   return () => 1 + Math.floor(random() * max);
 }
 
-export function countInChunks(bytes: Uint8Array, nextSize: () => number): FrameCountResult {
-  const counter = new FrameCounter();
+export function countInChunks(
+  bytes: Uint8Array,
+  nextSize: () => number,
+  options: FrameCounterOptions = {},
+): FrameCountResult {
+  const counter = new FrameCounter(options);
   for (const chunk of chunksOf(bytes, nextSize)) counter.push(chunk);
   return counter.finish();
 }
 
-export function countWhole(bytes: Uint8Array): FrameCountResult {
-  return countInChunks(bytes, fixedSize(bytes.length));
+export function countWhole(bytes: Uint8Array, options: FrameCounterOptions = {}): FrameCountResult {
+  return countInChunks(bytes, fixedSize(bytes.length), options);
 }
 
 export async function* toAsync(chunks: Iterable<Uint8Array>): AsyncGenerator<Uint8Array> {

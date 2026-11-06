@@ -1,6 +1,7 @@
-import { FRAME_HEADER_SIZE } from './constants.js';
+import { COUNT_METADATA_FRAME, FRAME_HEADER_SIZE } from './constants.js';
 import { parseFrameHeader } from './frameHeader.js';
 import { ID3V2_HEADER_SIZE, id3v2TagSize } from './id3v2.js';
+import { detectMetadataFrame, type MetadataFrameKind } from './metadataFrame.js';
 import type { MpegLayer, MpegVersion } from './types.js';
 
 /**
@@ -11,9 +12,16 @@ import type { MpegLayer, MpegVersion } from './types.js';
  */
 type Mode = 'skipping-tags' | 'searching' | 'hopping' | 'done';
 
+export interface FrameCounterOptions {
+  /** Count a leading Xing/Info/VBRI metadata frame as a frame. Defaults to COUNT_METADATA_FRAME. */
+  countMetadataFrame?: boolean;
+}
+
 export interface FrameCountResult {
-  /** Complete MPEG-1 Layer III frames found. */
+  /** Complete MPEG-1 Layer III frames found (see FrameCounterOptions.countMetadataFrame). */
   readonly frameCount: number;
+  /** The kind of metadata frame at the start of the stream, if there was one. */
+  readonly metadataFrame: MetadataFrameKind | null;
   /** The first well-formed header of an unsupported MPEG version/layer, if any was seen. */
   readonly unsupportedFormat: { readonly version: MpegVersion; readonly layer: MpegLayer } | null;
 }
@@ -32,6 +40,7 @@ const APETAGEX = ascii('APETAGEX'); // APEv2 footer/header
  * chunks, or a candidate header plus its next-frame lookahead: at most ~1.4 KB).
  */
 export class FrameCounter {
+  readonly #countMetadataFrame: boolean;
   #mode: Mode = 'skipping-tags';
   #leftover: Uint8Array = new Uint8Array(0);
   /** Bytes still to jump over (rest of a frame or tag) before looking at data again. */
@@ -39,8 +48,14 @@ export class FrameCounter {
   /** True while jumping over a frame. It's only counted once the whole frame has gone past. */
   #inFrame = false;
   #frameCount = 0;
+  #sawFirstFrame = false;
+  #metadataFrame: MetadataFrameKind | null = null;
   #unsupportedFormat: FrameCountResult['unsupportedFormat'] = null;
   #finished = false;
+
+  constructor(options: FrameCounterOptions = {}) {
+    this.#countMetadataFrame = options.countMetadataFrame ?? COUNT_METADATA_FRAME;
+  }
 
   push(chunk: Uint8Array): void {
     if (this.#finished) throw new Error('push() called after finish()');
@@ -58,7 +73,11 @@ export class FrameCounter {
       // If we're still mid-jump over a frame here, the input was truncated: that frame is
       // incomplete and deliberately not counted.
     }
-    return { frameCount: this.#frameCount, unsupportedFormat: this.#unsupportedFormat };
+    return {
+      frameCount: this.#frameCount,
+      metadataFrame: this.#metadataFrame,
+      unsupportedFormat: this.#unsupportedFormat,
+    };
   }
 
   /** Consumes as much of `bytes` as possible and returns the unconsumed tail. */
@@ -140,6 +159,13 @@ export class FrameCounter {
 
     this.#mode = 'hopping';
     this.#inFrame = true;
+    if (!this.#sawFirstFrame) {
+      this.#sawFirstFrame = true;
+      // The whole frame is buffered here (the check above looked past its end), so its
+      // metadata tag, if any, is readable.
+      this.#metadataFrame = detectMetadataFrame(bytes, pos, result.header);
+      if (this.#metadataFrame !== null && !this.#countMetadataFrame) this.#inFrame = false;
+    }
     return frameLength;
   }
 
@@ -189,8 +215,11 @@ export class FrameCounter {
 }
 
 /** Counts frames in an async stream of chunks, e.g. a Node.js Readable or an upload stream. */
-export async function countFrames(source: AsyncIterable<Uint8Array>): Promise<FrameCountResult> {
-  const counter = new FrameCounter();
+export async function countFrames(
+  source: AsyncIterable<Uint8Array>,
+  options: FrameCounterOptions = {},
+): Promise<FrameCountResult> {
+  const counter = new FrameCounter(options);
   for await (const chunk of source) counter.push(chunk);
   return counter.finish();
 }

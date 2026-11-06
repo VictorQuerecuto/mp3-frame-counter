@@ -67,6 +67,26 @@ export function buildFrame(options: HeaderOptions = {}): Uint8Array {
 }
 
 /**
+ * A frame carrying an encoder metadata tag. Offsets are written out from the spec here rather
+ * than imported, so the tests check the source independently:
+ *   Xing/Info: 4-byte header + 2 if CRC + side info (17 bytes mono, 32 otherwise)
+ *   VBRI: always 36 bytes from the frame start
+ */
+export function buildMetadataFrame(
+  kind: 'Xing' | 'Info' | 'VBRI',
+  options: HeaderOptions = {},
+): Uint8Array {
+  const frame = buildFrame(options);
+  const isMono = options.channelModeBits === 0b11;
+  const offset = kind === 'VBRI' ? 36 : 4 + (options.hasCrc ? 2 : 0) + (isMono ? 17 : 32);
+  frame.set(
+    Uint8Array.from(kind, (char) => char.charCodeAt(0)),
+    offset,
+  );
+  return frame;
+}
+
+/**
  * A frame with an unsupported version/layer. Its body length is irrelevant to the counter
  * (it never hops on these), so a fixed size keeps the helper independent of other tables.
  */

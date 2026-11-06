@@ -118,6 +118,15 @@ describe('parseFrameHeader', () => {
       expect(expectRejection(parseFrameHeader(buildHeader(options))).kind).toBe('invalid');
     });
 
+    it('rejects forbidden values as invalid even when the version is unsupported', () => {
+      // A JPEG's FF E2 marker followed by a small length: must not be reported as MPEG-2.5 audio.
+      const jpegMarker = Uint8Array.of(0xff, 0xe2, 0x0c, 0x58);
+      expect(expectRejection(parseFrameHeader(jpegMarker)).kind).toBe('invalid');
+
+      const mpeg2BadBitrate = buildHeader({ versionBits: 0b10, bitrateIndex: 15 });
+      expect(expectRejection(parseFrameHeader(mpeg2BadBitrate)).kind).toBe('invalid');
+    });
+
     it('throws a RangeError when fewer than 4 bytes are available', () => {
       expect(() => parseFrameHeader(Uint8Array.of(0xff, 0xfb))).toThrow(RangeError);
       expect(() => parseFrameHeader(buildHeader(), 1)).toThrow(RangeError);

@@ -50,11 +50,10 @@ export function parseFrameHeader(bytes: Uint8Array, offset = 0): HeaderParseResu
   if (version == null) return invalid(`reserved version bits ${versionBits}`);
   if (layer == null) return invalid(`reserved layer bits ${layerBits}`);
 
-  // Must be checked before reading the bitrate: other versions/layers use different tables.
-  if (version !== 'MPEG-1' || layer !== 'Layer III') {
-    return reject({ kind: 'unsupported', version, layer });
-  }
-
+  // Bitrate index 0/15 and sample-rate index 3 are invalid in every MPEG version and layer, so
+  // reject them before the version check: "unsupported" should only ever describe a well-formed
+  // header (otherwise e.g. a JPEG's FF E2 marker would be reported as MPEG-2.5 audio).
+  // The looked-up values themselves are only meaningful for MPEG-1 Layer III.
   const bitrateIndex = (b2 >> 4) & 0x0f;
   const bitrateKbps = BITRATES_KBPS[bitrateIndex];
   if (bitrateKbps == null) {
@@ -64,6 +63,10 @@ export function parseFrameHeader(bytes: Uint8Array, offset = 0): HeaderParseResu
   const sampleRateIndex = (b2 >> 2) & 0b11;
   const sampleRate = SAMPLE_RATES_HZ[sampleRateIndex];
   if (sampleRate == null) return invalid(`reserved sample-rate index ${sampleRateIndex}`);
+
+  if (version !== 'MPEG-1' || layer !== 'Layer III') {
+    return reject({ kind: 'unsupported', version, layer });
+  }
 
   const channelMode = CHANNEL_MODES[(b3 >> 6) & 0b11];
   // Unreachable (a 2-bit index into a 4-entry table), but the compiler can't prove that.
